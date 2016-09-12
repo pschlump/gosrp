@@ -55,7 +55,7 @@ What follows is a complete description of the entire SRP authentication process 
 
 Table 3 shows the notation used in this section. The values n and g are well-known values, agreed to beforehand.
 
-To establish a password P with Steve, Carol picks a random salt s, and computes
+To establish a password P with Steve, Carol picks a random salt s, and computes 		- In this this is registration of new user or password change
 
 		x = H(s, P)
 		v = g^x
@@ -87,7 +87,7 @@ To authenticate, Carol and Steve engage in the protocol described in Table 4. A 
 		6.		K = H(S)										K = H(S)			Both sides compute the same K - Update D.B. with A,B,b,K
 																In d.b. Update(r){C,t,s,v,B,S,K,M,K}
 
-		7.		M[1] = H(A, B, K)		M[1],r -->				(verify M[1])		Lookup D.B. getting s, A, B, b, K
+		7.		M[1] = H(A, B, K)		M[1],r -->				(verify M[1])		Lookup D.B. getting s, A, B, b, K		/api/srp_verify
 		8.		(verify M[2])			<-- M[2]				M[2] = H(A, M[1], K)
 
 		9.		U = H(t,K)										U = H(t,K)			Generate session ID, store K, C, s, info in D.B. with key U
@@ -231,6 +231,13 @@ var g_db_pos = 0
 
 // /api/spr_login
 // match with __construct
+// *_s is base 16 string representation of value.
+// Names are prefixed with 'X' to make them searchable in code.
+// set 	Salt, Salt_s
+//     	Xv, Xv_s
+//     	Xk, Kx_s = Hash( XN || Xg )
+//		Xb, Xb_s = random value, checked for unlikely error
+//
 func (gs *GoSrp) Setup(verifier string, salt string) {
 	zero := big.NewInt(0)
 	ok := false
@@ -247,7 +254,7 @@ func (gs *GoSrp) Setup(verifier string, salt string) {
 	if db8 {
 		fmt.Printf("Hash=%s\n", HashStrings.HashStrings(gs.XN.HexString()+gs.Xg.HexString()))
 	}
-	gs.Xk, ok = big.NewInt(0).SetString(HashStrings.HashStrings(gs.XN.HexString()+gs.Xg.HexString()), 16)
+	gs.Xk, ok = big.NewInt(0).SetString(HashStrings.HashStrings(gs.XN.HexString()+gs.Xg.HexString()), 16) // questionalble, k=H(N || g)
 	gs.Xk_s = gs.Xk.HexString()
 	if !ok {
 		fmt.Printf("Error on convert of string to big, variable k\n")
@@ -257,15 +264,17 @@ func (gs *GoSrp) Setup(verifier string, salt string) {
 	for {
 		gs.Xb = randlong(bits)
 		gs.Xb_s = gs.Xb.HexString()
+
 		if fixBxyzy2 {
 			gs.Xb_s = "a5e998caa34be4c8843ceaa3897d4812da588c518af40216e685a8325736b12e7ddd5d2d905b01fbe7cdc7d11dbd25ac59a7f0ec51c1f10efe3d6f91b1550418"
 			gs.Xb, _ = big.NewInt(0).SetString(gs.Xb_s, 16)
 		}
 
-		gPowed := big.NewInt(0).Exp(gs.Xg, gs.Xb, gs.XN)
-		t1 := big.NewInt(0).Mul(gs.Xk, gs.Xv)
-		t2 := big.NewInt(0).Add(t1, gPowed)
-		gs.XB = big.NewInt(0).Mod(t2, gs.XN)
+		// 4.								<-- B, u				B = v + g^b			Lookup D.B. (C), get s,v - gen b      ?? u
+		gPowed := big.NewInt(0).Exp(gs.Xg, gs.Xb, gs.XN) // g^b modulo N
+		t1 := big.NewInt(0).Mul(gs.Xk, gs.Xv)            // k*v
+		t2 := big.NewInt(0).Add(t1, gPowed)              // (k*v) + (B == g^b)
+		gs.XB = big.NewInt(0).Mod(t2, gs.XN)             // modulo N
 
 		if fixBxyzy {
 			gs.Xb_s = "a5e998caa34be4c8843ceaa3897d4812da588c518af40216e685a8325736b12e7ddd5d2d905b01fbe7cdc7d11dbd25ac59a7f0ec51c1f10efe3d6f91b1550418"
@@ -274,14 +283,13 @@ func (gs *GoSrp) Setup(verifier string, salt string) {
 			gs.XB, _ = big.NewInt(0).SetString(gs.XB_s, 16)
 		}
 
-		tf := big.NewInt(0).Mod(gs.XB, gs.XN)
+		tf := big.NewInt(0).Mod(gs.XB, gs.XN) // check B % N not equal to zero, if it is 0, then generate new random 'b' value
 		if tf.Cmp(zero) != 0 {
 			break
 		}
 	}
-	gs.XB_s = gs.XB.HexString()
+	gs.XB_s = gs.XB.HexString() // save XB_s, from XB
 
-	// Xyzzy - conver to hext values - and test
 }
 
 func (gs *GoSrp) CalculateA() string {
@@ -307,7 +315,7 @@ func (gs *GoSrp) CalculateA() string {
 		}
 	}
 
-	gs.XA_s = gs.XA.HexString()
+	gs.XA_s = gs.XA.HexString() // XA_s = XA
 	gs.State = 2
 
 	return gs.XA_s
@@ -349,7 +357,7 @@ func (gs *GoSrp) IssueChallenge(A_s string) {
 	avu := big.NewInt(0).Mul(t1, t2)             //
 	gs.XS = big.NewInt(0).Exp(avu, gs.Xb, gs.XN) // matched w/ python
 	gs.XS_s = gs.XS.HexString()                  //
-	gs.Key_s = HashStrings.HashStrings(gs.XS_s)  //
+	gs.Key_s = HashStrings.HashStrings(gs.XS_s)  //	!!!!!!!!!!!!!!!!! final key, gs.Key_s, shared between client/server !!!!!!!!!!!!!!!!!
 	//	fmt.Printf("db <<<CRITICAL>>>  S Must be SAME!  S [%s] Key [%s]\n", gs.XS_s, gs.Key_s)     // matched w/ python
 
 	gs.XM1_s = HashStrings.HashStrings(gs.XA_s + gs.XB_s + gs.Key_s)
