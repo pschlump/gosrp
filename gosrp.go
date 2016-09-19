@@ -1,9 +1,13 @@
 package gosrp
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
+	"os"
 
 	"github.com/pschlump/HashStrings"
+	"github.com/pschlump/godebug"
 	"github.com/pschlump/gosrp/big" // "./big" // "math/big"
 )
 
@@ -146,9 +150,12 @@ Local: /Users/corwin/Projects/tab-server1/SrpDemo/php/srp-6a-demo
 // Reorg into 'S' and 'I' value sets so 'S' is JSON/searializable
 
 type GoSrp struct {
-	State int
-	XBits int
-	Auth  bool
+	State         int
+	XBits         int
+	Auth          bool
+	fixRandomFlag bool
+	randomStr     string
+
 	//
 	Key_s   string
 	Salt_s  string
@@ -164,6 +171,8 @@ type GoSrp struct {
 	XS_s    string
 	Xu_s    string
 	Xv_s    string
+	XN_s    string
+	Xg_s    string
 	//
 	Salt *big.Int
 	XA   *big.Int
@@ -181,7 +190,7 @@ type GoSrp struct {
 
 // xyzzyBits // this is the function to change for different bit sizes - returns g,N - set in process, needs to set "bits" to value
 
-func GoSrpNew(C string, xBits int) (rv *GoSrp) {
+func GoSrpNew(C string, xBits int) *GoSrp {
 
 	s1, ok := pflist_str[xBits]
 	if !ok {
@@ -202,32 +211,156 @@ func GoSrpNew(C string, xBits int) (rv *GoSrp) {
 		State: 0,
 		XI_s:  C,
 		Xg:    g,
+		Xg_s:  g.HexString(),
 		XN:    N,
+		XN_s:  N.HexString(),
 		XBits: xBits,
 	}
 }
 
 var bits = 2048
 
-const fixBxyzy = false
-const fixAxyzy = false
-const fixBxyzy2 = false
-const g_debug1 = false
-
 var g_db_pos = 0
 
-//var g_ranv = []string{
-//	"a5e998caa34be4c8843ceaa3897d4812da588c518af40216e685a8325736b12e7ddd5d2d905b01fbe7cdc7d11dbd25ac59a7f0ec51c1f10efe3d6f91b1550418",
-//	"706a423a9b390a79a21a53b5ebb02bcf55be72fa4f9b151f03630558cf0309f9a6e5fe876ae82bd1e1e822ed46d08d353c9aaff3fbc5aa77f1d921e2150c6751",
-//	"2a0c1260b9726fc4860feb7f3f0e500eaf330394c1344bd0f584c74924be5fb1c6415911ff21274b10f43bab43a0697fc0e554b8d4809014303c58c545fe49f6",
-//	"37686caac6d5f387301ec38565af22024f95893cf8fcd51306e2ba049bd966c182b6a1dda8155540bdf918bfb46b8f610c2dbebe8862e431a30a605a65bb1c77",
-//	"5327effd2a7f5ff1c37313c1b75d09501c9a9edc4efcf18690f58bb1f87aee5a880c4a4bd470bd425365e40d1c6a05fb26d0f553339b0faf12fbca1f82511bf9",
-//	"fa8606fe621cd0ae9a16b7920357c83f56a2f9243c266f1f34a2222e97060cc6ad9cd6116ec7787fd406b75a3eb0ae5ad2fa0b0fc6aa84ce26947946e69f3bce",
-//	"a7afc01c620ef349e4c95fda9a59359abe08bdff3b4143018bcdb9d703a5bcae404e944581bfda2b7ad2c36d7c00a3bae2d0954638b16ee1e8b13691d809ade6",
-//	"951d8d52017cfa5260206e7db0bed8535b6435a1aa3ba7d2310fc03b96a1538cee798fda92b433ae577411a7147c8f186c26ff582a3bbcbe93e48e0ade190b7d",
-//	"4d72896c1ef128209e72a44a4d5c30ef22b6cc0aba3aa00a481028f8e58d640ba531aa6c09fb2b874478edf1752ae3b165bfeb99128d8246e68c09271000aed1",
-//	"3f2d07a6ddc2894d631a452abb60233ab8857586a77bd59897621fb8212ff730444850aee4fd3217971b70d8fc1fc8e18d66aac6c884a652815c4523e4e55ac3",
-//}
+// GenerateVerifier takes passowrd and computes the verifier and the salt and returns them.
+//
+// Go Client Side.
+//
+// To establish a password P with Steve, Carol picks a random salt s, and computes 		- In this this is registration of new user or password change
+//
+// 		x = H(s, P)
+// 		v = g^x
+//
+// Steve stores v and s as Carol's password verifier and salt. Remember that the computation of v is implicitly reduced modulo n. x is
+// discarded because it is equivalent to the plaintext password P.
+//
+
+func (gs *GoSrp) GenerateVerifier(username, password string) (verifier string, salt string) {
+	/*
+
+	   // Generate a new SRP verifier. Password is the plaintext password.
+	   //
+	   // options is optional and can include:
+	   //   in for testing.  Random UUID if not provided.
+	   // - salt: String. A salt to use.  Mostly this is passed in for
+	   //   testing.  Random UUID if not provided.
+	   // - SRP parameters (see _defaults and paramsFromOptions below)
+	   _srp.generateVerifier = function (username, password, options) {
+	   	var params = paramsFromOptions(options);
+
+	   	var salt = (options && options.salt) || random16byteHex.random();
+
+	   	if ( _srp_debug1 ) {
+	   		salt = "6b6e1eda7efb668c36ebf95c107300a3";
+	   	}
+
+	   	var ix_s = salt + username + password;		// this fails to match with RFC2945 where x = H ( s | H ( I | ":" | P ) )
+	   	var x = params.hash(salt + username + password);
+	   	var xi = new BigInteger(x, 16);
+	   	var v = params.g.modPow(xi, params.N);
+	   	var vStr = v.toString(16);
+
+	   	if ( _srp_debug1 ) {
+	   		console.log ( "salt=", salt);
+	   		console.log ( "username=", username);
+	   		console.log ( "password=", password);
+	   		console.log ( "x=", xi.toString(16));
+	   		console.log ( "    ix_s = ["+ix_s+"]" );
+	   		console.log ( "    x_s = ["+x+"]" );
+	   		console.log ( "g=", params.g.toString(16) );
+	   		console.log ( "N=", params.N.toString(16));
+	   		console.log ( "v=", vStr)
+	   		// x = H(s, I, p)       # Private key
+	   		// v = pow(g, x, N)     # Password verifier
+	   	}
+
+	   	if ( _srp_debug1 ) {
+	   		if ( salt === "6b6e1eda7efb668c36ebf95c107300a3" ) {
+	   			var vRef = "aa4495a557a7a5b047f5bffba993e456ffdc530476554d76641e75179b83dcecafa5b4fa9cd6fbdded13e68c736a0701f3a9765e536d875a6e9c6946d141305ed95ae48579d83a3ab06c79b0be0d276b9d8c39078c8b601608db3bb747b9ec70532ed614af1a5923f0e28ba93579a5e2d057ffb83b8b9b55aa354f8ed9d107fd628e1a746df35ef948815e24d7a4f505eb68f7bd05bef55c6c5ee2cf0c26d1c8be150d4479fa2e4816a74df4f2716e0f24077d3d589104f19a61576fd3d920421eec73bb52549f39cd777147abf727d9b77094aa037ba30851caeb1260186fae83f81b707bb566e4888f6a23c8d3c52de5a8ab2cac6274b5842109235d963299";
+	   			if ( vStr === vRef ) {
+	   				console.log ( "Looks like correct v" );
+	   			} else {
+	   				console.log ( "FAIL - incorrect v" );
+	   			}
+	   		}
+	   	}
+
+	   	return {
+	   		salt:salt,
+	   		verifier:vStr
+	   	};
+	   };
+	*/
+
+	salt_b, err := GenRandBytes(16)
+	if err != nil {
+	}
+
+	salt = fmt.Sprintf("%x", salt_b) // 32 bytes of salt
+
+	if dbTestingMode && gs.fixRandomFlag {
+		salt = gs.randomStr
+	}
+
+	// var ix_s = salt + username + password;		// this fails to match with RFC2945 where x = H ( s | H ( I | ":" | P ) )
+	// ix_s := salt + username + password
+	// ix_s := salt + username + password
+	// var x = params.hash(salt + username + password);
+
+	//  RFC2945 specifies x = H ( s | H ( I | ":" | P ) ) -- Note s|H(I|":"|P) - no colon between s|H
+	x := HashStrings.HashStrings(salt, HashStrings.HashStrings(username, ":", password))
+
+	// var xi = new BigInteger(x, 16);
+	xi, ok := big.NewInt(0).SetString(x, 16)
+	if !ok {
+		fmt.Printf("Failed to convert x=[%s] to big int\n", x)
+	}
+
+	// 		v = g^x
+	// var v = params.g.modPow(xi, params.N);
+	v := big.NewInt(0).Exp(gs.Xg, xi, gs.XN) // g^x modulo N
+
+	// var vStr = v.toString(16);
+	verifier = v.HexString()
+
+	return
+}
+
+func GenRandBytes(nRandBytes int) (buf []byte, err error) {
+	if dbCipher {
+		fmt.Printf("AT: %s\n", godebug.LF())
+	}
+	buf = make([]byte, nRandBytes)
+	_, err = rand.Read(buf)
+	if err != nil {
+		fmt.Printf(`{"msg":"Error generaintg random numbers :%s"}\n`, err)
+		return nil, err
+	}
+	// fmt.Printf("Value: %x\n", buf)
+	return
+}
+
+func GenRandNumber(nDigits int) (buf string, err error) {
+
+	var n int64
+	for {
+		binary.Read(rand.Reader, binary.LittleEndian, &n)
+		if n < 0 {
+			n = -n
+		}
+		if n > 1000000 {
+			break
+		}
+		// fmt.Printf("Looping GenRandNumber=%d\n", n)
+	}
+	// fmt.Printf("Big Eenough GenRandNumber=%d\n", n)
+	n = n % 100000000
+	// fmt.Printf("GenRandNumber=%d\n", n)
+	buf = fmt.Sprintf("%08d", n)
+	// fmt.Printf("GenRandNumber buf=%s\n", buf)
+
+	return
+}
 
 // /api/spr_login
 // match with __construct
@@ -244,6 +377,11 @@ func (gs *GoSrp) Setup(verifier string, salt string) {
 
 	gs.State = 1
 	gs.Salt_s = salt
+
+	if dbTestingMode && gs.fixRandomFlag {
+		gs.Salt_s = gs.randomStr
+	}
+
 	gs.Salt, ok = big.NewInt(0).SetString(gs.Salt_s, 16)
 	gs.Xv_s = verifier
 	gs.Xv, ok = big.NewInt(0).SetString(gs.Xv_s, 16)
@@ -254,7 +392,8 @@ func (gs *GoSrp) Setup(verifier string, salt string) {
 	if db8 {
 		fmt.Printf("Hash=%s\n", HashStrings.HashStrings(gs.XN.HexString()+gs.Xg.HexString()))
 	}
-	gs.Xk, ok = big.NewInt(0).SetString(HashStrings.HashStrings(gs.XN.HexString()+gs.Xg.HexString()), 16) // questionalble, k=H(N || g)
+	// gs.Xk, ok = big.NewInt(0).SetString(HashStrings.HashStrings(gs.XN.HexString()+gs.Xg.HexString()), 16) // questionalble, k=H(N || g)
+	gs.Xk, ok = big.NewInt(0).SetString(HashStrings.HashStrings(gs.XN_s, ":", gs.Xg_s), 16)
 	gs.Xk_s = gs.Xk.HexString()
 	if !ok {
 		fmt.Printf("Error on convert of string to big, variable k\n")
@@ -265,8 +404,8 @@ func (gs *GoSrp) Setup(verifier string, salt string) {
 		gs.Xb = randlong(bits)
 		gs.Xb_s = gs.Xb.HexString()
 
-		if fixBxyzy2 {
-			gs.Xb_s = "a5e998caa34be4c8843ceaa3897d4812da588c518af40216e685a8325736b12e7ddd5d2d905b01fbe7cdc7d11dbd25ac59a7f0ec51c1f10efe3d6f91b1550418"
+		if dbTestingMode && gs.fixRandomFlag {
+			gs.Xb_s = gs.randomStr
 			gs.Xb, _ = big.NewInt(0).SetString(gs.Xb_s, 16)
 		}
 
@@ -275,13 +414,6 @@ func (gs *GoSrp) Setup(verifier string, salt string) {
 		t1 := big.NewInt(0).Mul(gs.Xk, gs.Xv)            // k*v
 		t2 := big.NewInt(0).Add(t1, gPowed)              // (k*v) + (B == g^b)
 		gs.XB = big.NewInt(0).Mod(t2, gs.XN)             // modulo N
-
-		if fixBxyzy {
-			gs.Xb_s = "a5e998caa34be4c8843ceaa3897d4812da588c518af40216e685a8325736b12e7ddd5d2d905b01fbe7cdc7d11dbd25ac59a7f0ec51c1f10efe3d6f91b1550418"
-			gs.Xb, _ = big.NewInt(0).SetString(gs.Xb_s, 16)
-			gs.XB_s = "905fcb1556f92082937f943a004dbc79626d0dd443f9e00a5f3689feee243dd651abf708732d66fa848ab1d9d5ab73012c37029c4814c72dd17855c74e710df337504e97ab225f8ae46f7d6ed2ded5496fb15b5dc4c050ada06923e88867635f4e88a15095c1fab9e9b00690c3530b4582bc497e1b23636b41e84082332bde5bbf08c95b0bdc95b16268fc2a2047f84d3f359b5c9ac7e81d764cb411e2c693683a4772fcee1f7e4da5f159fe7e6c0e9cf732ce73fea6641474eed2ea34244ac5291e8dbd75a80b1f181d9358d44f4a1ee315f43ffdb4147d791082d846f7604d10ec5e4f5b97f437719dc0a7f4ed429fe9a993c35317139c13c7fbddadbc2ee8"
-			gs.XB, _ = big.NewInt(0).SetString(gs.XB_s, 16)
-		}
 
 		tf := big.NewInt(0).Mod(gs.XB, gs.XN) // check B % N not equal to zero, if it is 0, then generate new random 'b' value
 		if tf.Cmp(zero) != 0 {
@@ -299,15 +431,13 @@ func (gs *GoSrp) CalculateA() string {
 		gs.Xa = randlong(bits)
 		gs.Xa_s = gs.Xa.HexString()
 
+		if dbTestingMode && gs.fixRandomFlag {
+			gs.Xa_s = gs.randomStr
+			gs.Xa, _ = big.NewInt(0).SetString(gs.Xa_s, 16)
+		}
+
 		gPowed := big.NewInt(0).Exp(gs.Xg, gs.Xa, gs.XN)
 		gs.XA = gPowed
-
-		if fixAxyzy {
-			gs.Xa_s = "706a423a9b390a79a21a53b5ebb02bcf55be72fa4f9b151f03630558cf0309f9a6e5fe876ae82bd1e1e822ed46d08d353c9aaff3fbc5aa77f1d921e2150c6751"
-			gs.Xa, _ = big.NewInt(0).SetString(gs.Xb_s, 16)
-			gs.XA_s = "2379187907fc227726a6555367fe9c3c4185776b78fbb64ebc36865480ddb61b294ecc0732b6f32911c4805413acc9bb915c9345f717ccf5a28098234769e8ebb57183e    1f27cabc18ae28a17f29993d45643e8d019dccc1be03cdbcaa2ff07dd0dafb555553502334b368b0fe71671fddb5e1218b7f0268bea9f19a771411a14dc200864b77a495a4bd3834c9    c34e8b1b4d2d9ab6e04f6108b7426c296f1dbcd6424f0d2518ca2be6a31cba462613ff50baaaf03b1182574f0cf663ee436e7bb97ea09bfa4fdd2f6066ef959c5b3d03b03047e64fad    4dbb4a45aaaaa520e5db5b65a2b52188492ae3a81f6d2b2ad63794620c846eb805e739fc37830afd4963f"
-			gs.XA, _ = big.NewInt(0).SetString(gs.XB_s, 16)
-		}
 
 		tf := big.NewInt(0).Mod(gs.XA, gs.XN)
 		if tf.Cmp(zero) != 0 {
@@ -349,18 +479,23 @@ func (gs *GoSrp) IssueChallenge(A_s string) {
 		fmt.Printf("Bad A Value - error, %s\n", gs.XA.HexString())
 		panic("")
 	}
-	//	fmt.Printf("db A [%s] B [%s], hash [%s]\n", gs.XA_s, gs.XB_s, HashStrings.HashStrings(gs.XA_s+gs.XB_s)) //
-	u, ok := big.NewInt(0).SetString(HashStrings.HashStrings(gs.XA_s+gs.XB_s), 16) // matched w/ python
-	//	fmt.Printf("db <<<CRITICAL>>>  H(A+B) = u = [%s]\n", u.HexString())                        //
-	t1 := big.NewInt(0).Set(gs.XA)               //
-	t2 := big.NewInt(0).Exp(gs.Xv, u, gs.XN)     //
-	avu := big.NewInt(0).Mul(t1, t2)             //
-	gs.XS = big.NewInt(0).Exp(avu, gs.Xb, gs.XN) // matched w/ python
-	gs.XS_s = gs.XS.HexString()                  //
-	gs.Key_s = HashStrings.HashStrings(gs.XS_s)  //	!!!!!!!!!!!!!!!!! final key, gs.Key_s, shared between client/server !!!!!!!!!!!!!!!!!
-	//	fmt.Printf("db <<<CRITICAL>>>  S Must be SAME!  S [%s] Key [%s]\n", gs.XS_s, gs.Key_s)     // matched w/ python
 
-	gs.XM1_s = HashStrings.HashStrings(gs.XA_s + gs.XB_s + gs.Key_s)
+	fmt.Printf("gosrp: A [%s] B [%s], hash [%s], %s\n", gs.XA_s, gs.XB_s, HashStrings.HashStrings(gs.XA_s+gs.XB_s), godebug.LF()) //
+
+	u, ok := big.NewInt(0).SetString(HashStrings.HashStrings(gs.XA_s, ":", gs.XB_s), 16)      // ///////////////////////// xyzzy // xyzzySep20-2016 - probably wrong on next line.
+	fmt.Printf("gospr: <<<CRITICAL>>>  H(A+B) = u = [%s], %s\n", u.HexString(), godebug.LF()) //
+	t1 := big.NewInt(0).Set(gs.XA)                                                            //
+	t2 := big.NewInt(0).Exp(gs.Xv, u, gs.XN)                                                  //
+	avu := big.NewInt(0).Mul(t1, t2)                                                          //
+	gs.XS = big.NewInt(0).Exp(avu, gs.Xb, gs.XN)                                              // matched w/ python
+	gs.XS_s = gs.XS.HexString()                                                               //
+	gs.Key_s = HashStrings.HashStrings(gs.XS_s)                                               //	!!!!!!!!!!!!!!!!! final key, gs.Key_s, shared between client/server !!!!!!!!!!!!!!!!!
+
+	if dbDumpKeyToLog {
+		fmt.Fprintf(os.Stderr, "gosrp: <<<CRITICAL>>>  S Must be SAME!  S [%s] Key [%s]\n", gs.XS_s, gs.Key_s) // matched w/ python
+	}
+
+	gs.XM1_s = HashStrings.HashStrings(gs.XA_s, ":", gs.XB_s, ":", gs.Key_s) // xyzzy - error - check RFC, missing ":" in concat?
 
 	gs.Xu = u
 	gs.Xu_s = u.HexString()
@@ -378,7 +513,7 @@ func (gs *GoSrp) CalculateM2(ClientM1 string) (auth bool, M2_s string) {
 	//	7.		M[1] = H(A, B, K)		M[1],r -->				(verify M[1])		Lookup D.B. getting s, A, B, b, K
 	//	8.		(verify M[2])			<-- M[2]				M[2] = H(A, M[1], K)
 	// gs.XM1_s = HashStrings.HashStrings(gs.XA_s + gs.XB_s + gs.Key_s)
-	gs.XM2_s = HashStrings.HashStrings(gs.XA_s + gs.XM1_s + gs.Key_s)
+	gs.XM2_s = HashStrings.HashStrings(gs.XA_s, ":", gs.XM1_s, ":", gs.Key_s)
 	gs.XHAMK_s = HashStrings.HashStrings(gs.XA_s + gs.XM2_s + gs.XS_s)
 	// if subtle.ConstantTimeCompare ( []byte(gs.XM1_s), []byte(ClientM1) ) == 1 { // xyzzy - constant time compare
 	if gs.XM1_s == ClientM1 { // xyzzy - constant time compare
@@ -471,4 +606,16 @@ func (gs *GoSrp) TestDump4() {
 	}
 }
 
-const db8 = false
+func (gs *GoSrp) FixRandom(rval string) {
+	if dbTestingMode {
+		gs.fixRandomFlag = true
+		gs.randomStr = rval
+	}
+}
+
+const db8 = false           // dumps bunches out stuff to output (log) for testing, do not compile production version with this true.
+const dbDumpKeyToLog = true // dumps key to stderr, do not compile production version with this true.
+const dbTestingMode = true  // allows fixing of random number to a constant for testing, do not compile production version with this true.
+const dbCipher = false      // output message that we reached random number generat, file line.  Mostly harmless.
+
+/* vim: set noai ts=4 sw=4: */
