@@ -294,6 +294,7 @@ func (gs *GoSrp) GenerateVerifier(username, password string) (verifier string, s
 
 	salt_b, err := GenRandBytes(16)
 	if err != nil {
+		// xyzzyHandleError!
 	}
 
 	salt = fmt.Sprintf("%x", salt_b) // 32 bytes of salt
@@ -495,6 +496,7 @@ func (gs *GoSrp) IssueChallenge(A_s string) {
 		fmt.Fprintf(os.Stderr, "gosrp: <<<CRITICAL>>>  S Must be SAME!  S [%s] Key [%s]\n", gs.XS_s, gs.Key_s) // matched w/ python
 	}
 
+	// Carol → Steve: M1 = H[H(N) XOR H(g) | H(I) | s | A | B | KCarol]. Steve verifies M1.
 	gs.XM1_s = HashStrings.HashStrings(gs.XA_s, ":", gs.XB_s, ":", gs.Key_s) // xyzzy - error - check RFC, missing ":" in concat?
 
 	gs.Xu = u
